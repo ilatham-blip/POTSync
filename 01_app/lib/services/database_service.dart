@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class DatabaseService {
@@ -251,5 +253,40 @@ class DatabaseService {
   Future<void> saveEpisode(Map<String, dynamic> data) async {
     // data should correspond to columns in 'episodes' table
     await _insertWithSchemaFallback('episodes', data);
+  }
+
+  // ---------------------------------------------------------------------------
+  // RAW MEASUREMENT DATA (JSON UPLOAD)
+  // ---------------------------------------------------------------------------
+  Future<void> saveRawMeasurementData(String userId, List<Map<String, dynamic>> rawData) async {
+    // 1. Create a measurement row first to get the generated measurement_id
+    final insertData = {
+      'user_id': userId,
+      'recorded_at': DateTime.now().toUtc().toIso8601String(),
+      'source': 'device_id', // Or pass this in as a parameter
+    };
+
+    final response = await _client.from('measurements').insert(insertData).select().single();
+    final measurementId = response['measurement_id'];
+
+    if (measurementId == null) {
+      throw StateError("Failed to generate measurement_id from database.");
+    }
+
+    // 2. Convert raw data to JSON and upload to Supabase storage
+    final jsonString = jsonEncode(rawData);
+    final filePath = '$userId/$measurementId.json';
+
+    await _client.storage.from('raw_uploads').uploadBinary(
+      filePath,
+      Uint8List.fromList(utf8.encode(jsonString)),
+      fileOptions: const FileOptions(contentType: 'application/json', upsert: true),
+    );
+
+    // 3. Update the measurement row with the newly created file path
+    await _client
+        .from('measurements')
+        .update({'raw_file_path': filePath})
+        .eq('measurement_id', measurementId);
   }
 }

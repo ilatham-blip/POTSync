@@ -49,16 +49,27 @@ def show_data_dashboard(supabase):
         st.header("Individual Patient Explorer")
         
         users_df = fetch_table_data("user_profiles", supabase)
+        measurements_df = fetch_table_data("measurements", supabase)
         
+        user_ids = set()
         if not users_df.empty:
+            user_ids.update(users_df['id'].dropna().tolist())
+        if not measurements_df.empty:
+            user_ids.update(measurements_df['user_id'].dropna().tolist())
+            
+        user_ids = list(user_ids)
+        
+        if user_ids:
             # User selection for detailed view
             # Show User ID and Study Code if available for easier identification without PII
             def format_func(user_id):
-                row = users_df[users_df['id'] == user_id].iloc[0]
-                code = row.get('research_study_code', 'N/A')
-                return f"{user_id} (Study Code: {code})"
+                if not users_df.empty and user_id in users_df['id'].values:
+                    row = users_df[users_df['id'] == user_id].iloc[0]
+                    code = row.get('research_study_code', 'N/A')
+                    return f"{user_id} (Study Code: {code})"
+                else:
+                    return f"{user_id} (No Profile Data)"
             
-            user_ids = users_df['id'].tolist()
             selected_user_id = st.selectbox("Select User", user_ids, format_func=format_func)
             
             if selected_user_id:

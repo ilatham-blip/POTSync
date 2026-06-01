@@ -85,9 +85,12 @@ def download_ppg_file(raw_file_path: str , bucket_name: str = 'raw_uploads'):
         response = supabase.storage.from_(bucket_name).download(raw_file_path)
         
         # Convert bytes to pandas DataFrame
-        # Assuming the file is a parquet
-        
-        df = pd.read_parquet(BytesIO(response))
+        if raw_file_path.endswith('.json'):
+            import json
+            data = json.loads(response.decode('utf-8'))
+            df = pd.DataFrame(data)
+        else:
+            df = pd.read_parquet(BytesIO(response))
         
         print(f"✅ File downloaded successfully!")
         print(f"   Shape: {df.shape}")
@@ -123,15 +126,54 @@ def load_ppg_into_pipeline(measurement_id: str, bucket_name: str = 'raw_uploads'
         return None, None
     
     # Step 2: Extract file path
-    raw_file_path = measurement.get('raw_file_path')
-    if not raw_file_path:
+    raw_file_path = str(measurement.get('raw_file_path')).strip()
+    user_id = str(measurement.get('user_id')).strip()
+    
+    if not raw_file_path or raw_file_path == 'None':
         print("❌ No raw_file_path found in measurement record")
         return measurement, None
+        
+    # Auto-correct the path if the mobile app only saved the UUID
+    if '/' not in raw_file_path:
+        if raw_file_path == user_id:
+            raw_file_path = f"{user_id}/{measurement_id}.json"
+        else:
+            raw_file_path = f"{user_id}/{raw_file_path}"
+    if not raw_file_path.endswith('.parquet') and not raw_file_path.endswith('.csv') and not raw_file_path.endswith('.json'):
+        raw_file_path = f"{raw_file_path}.json"
     
     # Step 3: Download and load PPG file
     ppg_df = download_ppg_file(raw_file_path, bucket_name)
     if ppg_df is None:
         return measurement, None
+        
+    # Step 4: Convert to Parquet if it was JSON
+    if raw_file_path.endswith('.json'):
+        print(f"\n--- CONVERTING JSON TO PARQUET ---")
+        parquet_path = raw_file_path.replace('.json', '.parquet')
+        parquet_buffer = BytesIO()
+        ppg_df.to_parquet(parquet_buffer, index=False)
+        parquet_buffer.seek(0)
+        
+        try:
+            # Upload new Parquet file
+            supabase.storage.from_(bucket_name).upload(
+                path=parquet_path,
+                file=parquet_buffer.getvalue(),
+                file_options={"content-type": "application/octet-stream", "upsert": "true"}
+            )
+            print(f"✅ Uploaded {parquet_path}")
+            
+            # Delete old JSON file
+            supabase.storage.from_(bucket_name).remove([raw_file_path])
+            print(f"✅ Deleted old {raw_file_path}")
+            
+            # Update measurements table with new path
+            supabase.table('measurements').update({'raw_file_path': parquet_path}).eq('measurement_id', measurement_id).execute()
+            measurement['raw_file_path'] = parquet_path
+            print(f"✅ Updated raw_file_path in database to {parquet_path}")
+        except Exception as e:
+            print(f"❌ Error during Parquet conversion/upload: {e}")
     
     print("\n" + "="*60)
     print("✅ READY FOR PROCESSING")
@@ -157,39 +199,33 @@ def ppg_processing(measurement_id):
     data = ppg_df
 
     A1 = data['A1'].values
-
     input_sig = A1
-    sampling_rate = 100
-    window_length_sec = 120
+    
+    # Bitalino raw ECG sampling rate is 1000 Hz
+    sampling_rate = 1000
 
-    # Set this parameter True if the signal has not been filtered:
-    filter_signal = True
-
-    # Call the PPG signal quality assessment function
-    clean_indices, noisy_indices = sqa(input_sig, sampling_rate, filter_signal)
-
-    # Call the PPG reconstruction function
-    ppg_reconstructed, updated_clean_indices, updated_noisy_indices = reconstruction(input_sig, clean_indices, noisy_indices, sampling_rate, filter_signal)
-
-    # Set the window length for HR and HRV extraction in terms of samples
-    window_length = window_length_sec*sampling_rate
-
-    # Call the clean segment extraction function
-    clean_segments = clean_seg_extraction(ppg_reconstructed, updated_noisy_indices, window_length)
-
-    # Set the peak detection method (optional)
-    peak_detection_method = 'heartpy'
-
-    # Call the peak detection function
-    peaks = peak_detection(clean_segments, sampling_rate, peak_detection_method)
-
-    flat_peaks = np.concatenate(peaks)
+    import heartpy as hp
+    import scipy.signal as sg
+    import numpy as np
+    
+    # =====================================================================
+    # PART 1: VISUAL PEAKS FOR DASHBOARD (Pure HeartPy, No Time-Warping)
+    # =====================================================================
+    # Filter the signal to remove baseline wander, optimal for peak finding
+    sos_hp = sg.butter(4, [0.5, 8.0], btype='bandpass', fs=sampling_rate, output='sos')
+    sig_for_hp = sg.sosfiltfilt(sos_hp, input_sig)
+    
+    try:
+        wd, _ = hp.process(sig_for_hp, sample_rate=sampling_rate, windowsize=0.75, report_time=False)
+        flat_peaks = np.array(wd['peaklist'])
+    except Exception as e:
+        print(f"Visual HeartPy processing failed: {e}")
+        flat_peaks = np.array([])
 
     df_peaks = pd.DataFrame({'Peak Sample': flat_peaks})
 
-
-    # Upload peaks to storage
-    peaks_filename = f"{measurement_id}_peaks.parquet"
+    user_id = measurement.get('user_id')
+    peaks_filename = f"{user_id}/{measurement_id}_peaks.parquet"
     peaks_buffer = BytesIO()
     df_peaks.to_parquet(peaks_buffer, index=False)
     peaks_buffer.seek(0)
@@ -198,22 +234,36 @@ def ppg_processing(measurement_id):
         path=peaks_filename,
         file=peaks_buffer.getvalue(),
         file_options={"content-type": "application/octet-stream"}
-        )
+    )
 
-
-
-    # Call the HR and HRV feature extraction function
-    if not peaks:
-        print("No peaks detected — skipping HRV extraction.")
-        hrv_data = pd.DataFrame()  # or None as you prefer
-    else:
-        hrv_data = hrv_extraction(clean_segments=clean_segments, peaks=peaks, sampling_rate=sampling_rate, window_length=window_length)
-        print("HRV columns available:", hrv_data.columns.tolist())
-        print("HRV data shape:", hrv_data.shape)
-        hrv_data = hrv_data[['HR', 'HRV_MeanNN', 'HRV_RMSSD', 'HRV_LF', 'HRV_HF', 'HRV_LFHF']]
-        print(hrv_data)
-
-
+    # =====================================================================
+    # PART 2: ML HRV ANALYSIS (e2epyppg for advanced noise rejection)
+    # =====================================================================
+    print("Running e2epyppg ML models for advanced HRV analysis...")
+    from e2epyppg.ppg_sqa import sqa
+    from e2epyppg.ppg_reconstruction import reconstruction
+    from e2epyppg.ppg_clean_extraction import clean_seg_extraction
+    from e2epyppg.ppg_peak_detection import peak_detection
+    from e2epyppg.ppg_hrv_extraction import hrv_extraction
+    
+    window_length_sec = 120
+    filter_signal = True
+    
+    try:
+        clean_indices, noisy_indices = sqa(input_sig, sampling_rate, filter_signal)
+        ppg_reconstructed, updated_clean_indices, updated_noisy_indices = reconstruction(input_sig, clean_indices, noisy_indices, sampling_rate, filter_signal)
+        
+        window_length = window_length_sec * sampling_rate
+        clean_segments = clean_seg_extraction(ppg_reconstructed, updated_noisy_indices, window_length)
+        
+        e2e_peaks = peak_detection(clean_segments, sampling_rate, 'heartpy')
+        
+        if not e2e_peaks:
+            raise ValueError("No peaks detected in clean segments.")
+            
+        hrv_data = hrv_extraction(clean_segments=clean_segments, peaks=e2e_peaks, sampling_rate=sampling_rate, window_length=window_length)
+        
+        print("Uploading advanced e2epyppg metrics to database.")
         supabase.table('measurements').update({
             'heart_rate': float(hrv_data['HR'][0]) if pd.notna(hrv_data['HR'][0]) else None,
             'mean_nn': float(hrv_data['HRV_MeanNN'][0]) if pd.notna(hrv_data['HRV_MeanNN'][0]) else None,
@@ -223,10 +273,9 @@ def ppg_processing(measurement_id):
             'lf_hf_ratio': float(hrv_data['HRV_LFHF'][0]) if pd.notna(hrv_data['HRV_LFHF'][0]) else None,
             'peaks_file_path': peaks_filename,
         }).eq('measurement_id', measurement_id).execute()  
-
-
-if __name__ == "__main__":
-    ppg_processing("f20c688a-4231-45f3-b703-bd00b1d73d27")
+        
+    except Exception as e:
+        print(f"e2epyppg HRV analysis failed: {e}")
 
 
 

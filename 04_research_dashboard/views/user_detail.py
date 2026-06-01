@@ -165,12 +165,37 @@ def show_user_detail(user_id: str, supabase):
             
             selected_idx = measurement_options.index(selected_option)
             selected_row = valid_measurements.iloc[selected_idx]
-            file_path = selected_row['raw_file_path']
+            file_path = str(selected_row['raw_file_path']).strip()
+            user_id = str(selected_row['user_id']).strip()
+            measurement_id = str(selected_row['measurement_id']).strip()
+            
+            # Auto-correct the file path if it's just the user_id or measurement_id
+            if '/' not in file_path:
+                if file_path == user_id:
+                    file_path = f"{user_id}/{measurement_id}.parquet"
+                else:
+                    file_path = f"{user_id}/{file_path}"
+            if not file_path.endswith('.parquet') and not file_path.endswith('.csv') and not file_path.endswith('.json'):
+                file_path = f"{file_path}.parquet"
+            
+            # Also get the peak file path from the db, fallback to raw logic if missing
+            peak_path = selected_row.get('peaks_file_path')
+            if pd.isna(peak_path) or not str(peak_path).strip():
+                peak_path = file_path.replace('.parquet', '_peaks.parquet')
+            else:
+                peak_path = str(peak_path).strip()
+                if '/' not in peak_path:
+                    if peak_path == user_id:
+                        peak_path = f"{user_id}/{measurement_id}_peaks.parquet"
+                    else:
+                        peak_path = f"{user_id}/{peak_path}"
+                if not peak_path.endswith('.parquet'):
+                    peak_path = f"{peak_path}_peaks.parquet" if not peak_path.endswith('_peaks') else f"{peak_path}.parquet"
             
             with st.spinner(f"Fetching signal data from {file_path}..."):
                 try:
                     raw_res = supabase.storage.from_("raw_uploads").download(file_path)
-                    peak_res = supabase.storage.from_("peak_indices").download(file_path)
+                    peak_res = supabase.storage.from_("peak_indices").download(peak_path)
                     
                     if file_path.endswith('.parquet'):
                         raw_df = pd.read_parquet(io.BytesIO(raw_res))
@@ -196,53 +221,173 @@ def show_user_detail(user_id: str, supabase):
                         peaks_df = pd.read_parquet(io.BytesIO(peaks_parquet))
                     
                     # --- Plot 1: Raw Upload + Peaks Overlaid ---
-                    signal_col = 'signal' if 'signal' in raw_df.columns else raw_df.columns[-1]
-                    peak_col = 'peak_index' if 'peak_index' in peaks_df.columns else peaks_df.columns[0]
+                    # Filter out time columns to find valid signal channels
+                    available_channels = [col for col in raw_df.columns if col.lower() not in ['time', 'timestamp', 'nseq']]
+                    if not available_channels:
+                        st.warning("No signal channels found. Using first column as fallback.")
+                        available_channels = raw_df.columns.tolist()
+                        
+                    default_idx = 0
+                    if 'A1' in available_channels:
+                        default_idx = available_channels.index('A1')
+                    elif 'signal' in available_channels:
+                        default_idx = available_channels.index('signal')
+                        
+                    signal_col = st.selectbox("Select Signal Channel", options=available_channels, index=default_idx)
                     
-                    # Try to find a time column, otherwise fallback to the row index
-                    time_col = 'time' if 'time' in raw_df.columns else ('timestamp' if 'timestamp' in raw_df.columns else None)
+                    peak_col = 'peak_index' if 'peak_index' in peaks_df.columns else peaks_df.columns[0]
                     peak_indices = peaks_df[peak_col].dropna().astype(int).values
                     
-                    # Make sure indices are within bounds
-                    peak_indices = peak_indices[peak_indices < len(raw_df)]
+                    # Estimate sampling frequency
+                    fs = 1000
+                    if len(peak_indices) > 1:
+                        med_diff = np.median(np.diff(peak_indices))
+                        est_fs = int(round(med_diff / 100) * 100)
+                        if 800 < est_fs < 1200: fs = 1000
+                        elif 80 < est_fs < 120: fs = 100
+                        elif 200 < est_fs < 300: fs = 250
+                        
+                    apply_recalc = st.checkbox("Recalculate Peaks (Fix Alignment)", value=False, help="Bypasses the corrupted database peaks and runs HeartPy locally on the raw signal to guarantee perfect mathematical alignment.")
                     
-                    x_raw = raw_df[time_col] if time_col else raw_df.index
-                    x_peaks = x_raw.iloc[peak_indices] if time_col else peak_indices
-        
+                    if apply_recalc:
+                        with st.spinner("Recalculating perfect peak alignment locally..."):
+                            import heartpy as hp
+                            import scipy.signal as sg
+                            
+                            # Filter signal slightly for peak detection so HeartPy can find them easily
+                            # (0.5 to 8.0 Hz is standard for removing baseline wander for peak detection)
+                            sos_hp = sg.butter(4, [0.5, min(8.0, fs/2 - 1)], btype='bandpass', fs=fs, output='sos')
+                            sig_for_hp = sg.sosfiltfilt(sos_hp, raw_df[signal_col].values)
+                            
+                            try:
+                                wd, m = hp.process(sig_for_hp, sample_rate=fs, windowsize=0.75, report_time=False)
+                                peak_indices = np.array(wd['peaklist'])
+                                peaks_df = pd.DataFrame({peak_col: peak_indices})
+                            except Exception as e:
+                                st.warning(f"Local peak calculation failed: {e}. Falling back to database peaks.")
+                    
+                    apply_crop = False
+                    if not peaks_df.empty:
+                        apply_crop = st.checkbox("Apply 5s Crop Offset", value=True, help="Removes the first 5 seconds of data before filtering to prevent filter ringing.")
+                        
+                        # The peaks (whether from database or recalculated) are on the FULL uncropped signal!
+                        # If we crop the first 5s of the signal for visualization, we must shift the peak indices
+                        # backwards by 5s so they map to the correct samples in the cropped array.
+                        if apply_crop:
+                            peak_indices = peak_indices - int(5 * fs)
+                            
+                        # Make sure indices are within bounds of the array we are going to plot, and filter out negatives
+                        expected_len = len(raw_df) - (int(5 * fs) if apply_crop else 0)
+                        peak_indices = peak_indices[(peak_indices >= 0) & (peak_indices < expected_len)]
+                        
+                    signal_display_options = st.multiselect(
+                        "Display Signals", 
+                        options=["Raw Signal", "Filtered Signal"], 
+                        default=["Raw Signal"], 
+                        help="Select which traces to overlay on the graph. 'Filtered Signal' applies a bandpass and median filter."
+                    )
+                    
+                    if apply_crop:
+                        start_idx = 5 * fs
+                    else:
+                        start_idx = 0
+                        
+                    # Calculate time in milliseconds based on the index and the sampling frequency
+                    index_array = pd.Series(raw_df.index)[start_idx:]
+                    x_raw = (index_array / fs) * 1000
+                        
+                    y_raw = raw_df[signal_col].iloc[start_idx:].copy()
+                    
+                    if "Filtered Signal" in signal_display_options:
+                        import scipy.signal as signal
+                        # 1. Bandpass filter for PPG (0.5 to 8.0 Hz)
+                        fLow = 0.5
+                        fHigh = 8.0
+                            
+                        nyquist = fs / 2.0
+                        if fHigh >= nyquist:
+                            fHigh = nyquist * 0.95
+                            
+                        sos = signal.butter(4, [fLow, fHigh], btype='bandpass', fs=fs, output='sos')
+                        filtered = signal.sosfiltfilt(sos, y_raw.values)
+                        
+                        # 2. Median filter: 15 ms window
+                        med_win = int(round(0.015 * fs))
+                        if med_win % 2 == 0:
+                            med_win += 1
+                        y_smooth = signal.medfilt(filtered, kernel_size=med_win)
+                        
+                        y_filtered = pd.Series(y_smooth, index=y_raw.index)
+                    
                     fig_signal = go.Figure()
                     
-                    # Add raw signal line
-                    fig_signal.add_trace(go.Scatter(
-                        x=x_raw, 
-                        y=raw_df[signal_col],
-                        mode='lines',
-                        name='Raw Signal',
-                        line=dict(color='#2563EB')
-                    ))
+                    # Add raw signal trace
+                    if "Raw Signal" in signal_display_options:
+                        fig_signal.add_trace(go.Scatter(
+                            x=x_raw, 
+                            y=y_raw,
+                            mode='lines',
+                            name='Raw Signal',
+                            line=dict(color='#000000', width=1) # Black
+                        ))
+
+                    # Add filtered signal trace
+                    if "Filtered Signal" in signal_display_options:
+                        fig_signal.add_trace(go.Scatter(
+                            x=x_raw, 
+                            y=y_filtered,
+                            mode='lines',
+                            name='Filtered Signal',
+                            line=dict(color='#2563EB', width=2) # Blue
+                        ))
                     
-                    # Add peaks as red dots
-                    fig_signal.add_trace(go.Scatter(
-                        x=x_peaks,
-                        y=raw_df[signal_col].iloc[peak_indices], 
-                        mode='markers',
-                        name='Detected Peaks',
-                        marker=dict(color='#EF4444', size=8, symbol='x')
-                    ))
+                    # Set default zoom to show 15 seconds of data
+                    zoom_samples = int(15 * fs)
+                    initial_range = None
+                    if len(x_raw) > zoom_samples:
+                        initial_range = [x_raw.iloc[0], x_raw.iloc[zoom_samples]]
+                    elif len(x_raw) > 0:
+                        initial_range = [x_raw.iloc[0], x_raw.iloc[-1]]
+                        
+                    if not peaks_df.empty:
+                        # Extract the exact x coordinates for the peaks
+                        x_peaks = x_raw.iloc[peak_indices]
+                        
+                        # Determine which y-values the peaks should be plotted on
+                        y_peaks_base = y_filtered if "Filtered Signal" in signal_display_options else y_raw
+                        
+                        # Add peaks as red dots
+                        fig_signal.add_trace(go.Scatter(
+                            x=x_peaks,
+                            y=y_peaks_base.iloc[peak_indices], 
+                            mode='markers',
+                            name='Detected Peaks',
+                            marker=dict(color='#EF4444', size=8, symbol='x')
+                        ))
                     
-                    fig_signal.update_layout(title="Raw Signal with Peak Detection", xaxis_title="Time / Index", yaxis_title="Amplitude")
+                    title = "Raw Signal with Peak Detection" if not peaks_df.empty else "Raw Signal"
+                    
+                    fig_signal.update_layout(
+                        title=title, 
+                        xaxis_title="Time (ms)", 
+                        yaxis_title="Amplitude (mV)",
+                        xaxis=dict(
+                            rangeslider=dict(visible=True),
+                            range=initial_range
+                        )
+                    )
                     st.plotly_chart(fig_signal, use_container_width=True)
                     
                     # --- Plot 2: NN Intervals Variation ---
-                    nn_intervals = np.diff(peak_indices)
-                    
-                    # The x-axis for NN intervals will now be the time (or index) of the *second* peak in each pair
-                    nn_times = x_peaks[1:] if len(x_peaks) > 1 else []
-                    
-                    if len(nn_intervals) > 0:
+                    if not peaks_df.empty and len(peak_indices) > 1:
+                        # Convert interval differences from samples to milliseconds
+                        nn_intervals_ms = (np.diff(peak_indices) / fs) * 1000
+                        nn_times = x_peaks.iloc[1:] if isinstance(x_peaks, pd.Series) else x_peaks[1:]
+                        
                         fig_nn = go.Figure()
                         fig_nn.add_trace(go.Scatter(
                             x=nn_times, 
-                            y=nn_intervals,
+                            y=nn_intervals_ms,
                             mode='lines+markers',
                             name='NN Interval',
                             line=dict(color='#10B981')
@@ -250,13 +395,15 @@ def show_user_detail(user_id: str, supabase):
                         
                         fig_nn.update_layout(
                             title="NN Interval Variation (Heart Rate Variability)",
-                            xaxis_title="Time / Index",
-                            yaxis_title="NN Interval (Samples)"
+                            xaxis_title="Time (ms)",
+                            yaxis_title="NN Interval (ms)"
                         )
                         st.plotly_chart(fig_nn, use_container_width=True)
                     else:
                         st.info("Not enough peaks detected to calculate NN intervals.")
                     
                 except Exception as e:
+                    import traceback
                     st.error(f"Error processing signal data: {e}")
+                    st.code(traceback.format_exc())
                     st.info(f"Tried to load '{file_path}' from storage.")
