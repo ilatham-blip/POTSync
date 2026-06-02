@@ -15,6 +15,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final appState = Provider.of<MyAppState>(context);
     return Scaffold(
       backgroundColor: kBackgroundColor,
       appBar: AppBar(
@@ -48,23 +49,23 @@ class _HomePageState extends State<HomePage> {
               GreetingCard(greeting: _greeting()),
               const SizedBox(height: 16),
               Row(
-                children: const [
+                children: [
                   Expanded(
                     child: StatCard(
                       icon: Icons.favorite_border,
-                      iconColor: Color(0xFFE53935),
-                      value: '0',
+                      iconColor: const Color(0xFFE53935),
+                      value: '${appState.episodesThisWeekCount}',
                       title: 'POTS Episodes',
                       subtitle: 'This week',
                     ),
                   ),
-                  SizedBox(width: 16),
+                  const SizedBox(width: 16),
                   Expanded(
                     child: StatCard(
                       icon: Icons.check_circle_outline,
-                      iconColor: Color(0xFF4F7CFF),
-                      value: '0',
-                      title: 'Entries Logged',
+                      iconColor: const Color(0xFF4F7CFF),
+                      value: '${appState.checkInAdherencePercentage}%',
+                      title: 'Checkin Adherence',
                       subtitle: 'This week',
                     ),
                   ),

@@ -1,3 +1,4 @@
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:heartbeat/app_theme.dart';
 import 'package:heartbeat/app_state.dart';
@@ -15,7 +16,151 @@ class _TrackerPage extends State<TrackerPage> {
   bool _showDizziness = true;
   bool _showFatigue = true;
   bool _showHydration = true;
-  
+  String _selectedTimeframe = 'week';
+
+  List<FlSpot> _getAggregatedSpots({
+    required MyAppState appState,
+    required String symptomType,
+    required String timeframe,
+  }) {
+    final now = DateTime.now();
+    final Map<int, List<double>> binData = {};
+
+    for (final entry in appState.morningEntries) {
+      final diff = DateTime(now.year, now.month, now.day)
+          .difference(DateTime(entry.dateTime.year, entry.dateTime.month, entry.dateTime.day))
+          .inDays;
+      int bin;
+      if (timeframe == 'day' && diff == 0) {
+        bin = entry.dateTime.hour;
+      } else if (timeframe == 'week' && diff >= 0 && diff < 7) {
+        bin = 6 - diff;
+      } else if (timeframe == 'month' && diff >= 0 && diff < 30) {
+        bin = 29 - diff;
+      } else {
+        continue;
+      }
+
+      if (symptomType == 'dizziness') {
+        final val = (entry.dizziness.index / 3.0) * 10.0;
+        binData.putIfAbsent(bin, () => []).add(val);
+      } else if (symptomType == 'fatigue') {
+        final val = (entry.abnormalTiredness.index / 3.0) * 10.0;
+        binData.putIfAbsent(bin, () => []).add(val);
+      }
+    }
+
+    for (final entry in appState.eveningEntries) {
+      final diff = DateTime(now.year, now.month, now.day)
+          .difference(DateTime(entry.dateTime.year, entry.dateTime.month, entry.dateTime.day))
+          .inDays;
+      int bin;
+      if (timeframe == 'day' && diff == 0) {
+        bin = entry.dateTime.hour;
+      } else if (timeframe == 'week' && diff >= 0 && diff < 7) {
+        bin = 6 - diff;
+      } else if (timeframe == 'month' && diff >= 0 && diff < 30) {
+        bin = 29 - diff;
+      } else {
+        continue;
+      }
+
+      if (symptomType == 'dizziness') {
+        final val = (entry.dizziness.index / 3.0) * 10.0;
+        binData.putIfAbsent(bin, () => []).add(val);
+      } else if (symptomType == 'fatigue') {
+        final val = (entry.abnormalTiredness.index / 3.0) * 10.0;
+        binData.putIfAbsent(bin, () => []).add(val);
+      }
+    }
+
+    for (final entry in appState.episodeEntries) {
+      final diff = DateTime(now.year, now.month, now.day)
+          .difference(DateTime(entry.dateTime.year, entry.dateTime.month, entry.dateTime.day))
+          .inDays;
+      int bin;
+      if (timeframe == 'day' && diff == 0) {
+        bin = entry.dateTime.hour;
+      } else if (timeframe == 'week' && diff >= 0 && diff < 7) {
+        bin = 6 - diff;
+      } else if (timeframe == 'month' && diff >= 0 && diff < 30) {
+        bin = 29 - diff;
+      } else {
+        continue;
+      }
+
+      if (symptomType == 'dizziness') {
+        final dizzinessVal = entry.scores['Dizziness when standing'] ??
+            entry.scores['Dizziness in upright position or while standing up'] ??
+            entry.scores['Dizziness, feeling that you are going to faint'];
+        if (dizzinessVal != null) {
+          binData.putIfAbsent(bin, () => []).add(dizzinessVal);
+        }
+      } else if (symptomType == 'fatigue') {
+        final fatigueVal = entry.scores['Difficulty concentrating'] ?? entry.scores['Fatigue'];
+        if (fatigueVal != null) {
+          binData.putIfAbsent(bin, () => []).add(fatigueVal);
+        }
+      } else if (symptomType == 'hydration') {
+        final hydrationVal = entry.scores['Difficulty breathing'] ?? entry.scores['Hydration'];
+        if (hydrationVal != null) {
+          binData.putIfAbsent(bin, () => []).add(hydrationVal);
+        }
+      }
+    }
+
+    for (final entry in appState.lifestyleEntries) {
+      final diff = DateTime(now.year, now.month, now.day)
+          .difference(DateTime(entry.date.year, entry.date.month, entry.date.day))
+          .inDays;
+      int bin;
+      if (timeframe == 'day' && diff == 0) {
+        bin = 12;
+      } else if (timeframe == 'week' && diff >= 0 && diff < 7) {
+        bin = 6 - diff;
+      } else if (timeframe == 'month' && diff >= 0 && diff < 30) {
+        bin = 29 - diff;
+      } else {
+        continue;
+      }
+
+      if (symptomType == 'hydration') {
+        final val = (entry.waterLitres / 5.0) * 10.0;
+        binData.putIfAbsent(bin, () => []).add(val);
+      }
+    }
+
+    final List<FlSpot> spots = [];
+    final sortedBins = binData.keys.toList()..sort();
+    for (final bin in sortedBins) {
+      final vals = binData[bin]!;
+      if (vals.isNotEmpty) {
+        final avg = vals.reduce((a, b) => a + b) / vals.length;
+        spots.add(FlSpot(bin.toDouble(), avg));
+      }
+    }
+
+    if (spots.isEmpty) {
+      double fallbackVal = 0;
+      if (symptomType == 'dizziness') {
+        fallbackVal = appState.combinedDizzinessAvg;
+      } else if (symptomType == 'fatigue') {
+        fallbackVal = appState.combinedFatigueAvg;
+      } else if (symptomType == 'hydration') {
+        fallbackVal = appState.combinedHydrationAvg;
+      }
+
+      if (fallbackVal > 0) {
+        spots.add(FlSpot(
+          timeframe == 'day' ? 12.0 : (timeframe == 'week' ? 6.0 : 29.0),
+          fallbackVal,
+        ));
+      }
+    }
+
+    return spots;
+  }
+
   // Helper to compute trend direction from a numeric series
   Map<String, dynamic> computeTrend(List<double> series) {
     if (series.isEmpty) {
@@ -386,24 +531,59 @@ class _TrackerPage extends State<TrackerPage> {
                           ),
                         ),
                         const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            ChoiceChip(
+                              label: const Text('Day'),
+                              selected: _selectedTimeframe == 'day',
+                              showCheckmark: false,
+                              onSelected: (v) {
+                                if (v) setState(() => _selectedTimeframe = 'day');
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            ChoiceChip(
+                              label: const Text('Week'),
+                              selected: _selectedTimeframe == 'week',
+                              showCheckmark: false,
+                              onSelected: (v) {
+                                if (v) setState(() => _selectedTimeframe = 'week');
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            ChoiceChip(
+                              label: const Text('Month'),
+                              selected: _selectedTimeframe == 'month',
+                              showCheckmark: false,
+                              onSelected: (v) {
+                                if (v) setState(() => _selectedTimeframe = 'month');
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
                         Wrap(
                           spacing: 8,
                           children: [
                             ChoiceChip(
                               label: const Text('Dizziness'),
                               selected: _showDizziness,
+                              showCheckmark: false,
                               avatar: const CircleAvatar(backgroundColor: Colors.purple, radius: 6),
                               onSelected: (v) => setState(() => _showDizziness = v),
                             ),
                             ChoiceChip(
                               label: const Text('Fatigue'),
                               selected: _showFatigue,
+                              showCheckmark: false,
                               avatar: const CircleAvatar(backgroundColor: Colors.orange, radius: 6),
                               onSelected: (v) => setState(() => _showFatigue = v),
                             ),
                             ChoiceChip(
                               label: const Text('Hydration'),
                               selected: _showHydration,
+                              showCheckmark: false,
                               avatar: const CircleAvatar(backgroundColor: Colors.blue, radius: 6),
                               onSelected: (v) => setState(() => _showHydration = v),
                             ),
@@ -420,9 +600,10 @@ class _TrackerPage extends State<TrackerPage> {
                           child: MultiSymptomPlot(
                                 width: constraints.maxWidth * 0.9,
                                 height: constraints.maxHeight / 3,
-                                dizziness: _showDizziness ? (appState.dizziness.isNotEmpty ? appState.dizziness : [appState.combinedDizzinessAvg]) : const [],
-                                fatigue: _showFatigue ? appState.fatigueSeries : const [],
-                                hydration: _showHydration ? appState.hydrationSeries : const [],
+                                dizziness: _showDizziness ? _getAggregatedSpots(appState: appState, symptomType: 'dizziness', timeframe: _selectedTimeframe) : const [],
+                                fatigue: _showFatigue ? _getAggregatedSpots(appState: appState, symptomType: 'fatigue', timeframe: _selectedTimeframe) : const [],
+                                hydration: _showHydration ? _getAggregatedSpots(appState: appState, symptomType: 'hydration', timeframe: _selectedTimeframe) : const [],
+                                timeframe: _selectedTimeframe,
                               ),
                         ),
                       ],

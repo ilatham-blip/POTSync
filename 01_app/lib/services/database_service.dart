@@ -444,4 +444,43 @@ class DatabaseService {
     // data should correspond to columns in 'episodes' table
     await _insertWithSchemaFallback('episodes', data);
   }
+
+  // ---------------------------------------------------------------------------
+  // HISTORICAL DATA RETRIEVAL
+  // ---------------------------------------------------------------------------
+  Future<List<Map<String, dynamic>>> fetchMorningCheckIns(String userId) async {
+    final response = await _client
+        .from('morning_checkins')
+        .select()
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchEveningCheckIns(String userId) async {
+    final response = await _client
+        .from('evening_checkins')
+        .select()
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchEpisodes(String userId) async {
+    final response = await _client
+        .from('episodes')
+        .select()
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchLifestyleLogs(String userId) async {
+    final response = await _client
+        .from('lifestyle_logs')
+        .select()
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(response as List);
+  }
 }
