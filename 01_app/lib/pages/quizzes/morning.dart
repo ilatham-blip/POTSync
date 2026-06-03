@@ -335,6 +335,74 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
     });
   }
 
+  Map<String, int> _estimateHeartMetrics(List<double> data, int durationSeconds) {
+    if (data.isEmpty || durationSeconds <= 0) {
+      return {'bpm': 72, 'hrv': 45};
+    }
+
+    double minVal = data[0];
+    double maxVal = data[0];
+    double sum = 0;
+    for (final val in data) {
+      if (val < minVal) minVal = val;
+      if (val > maxVal) maxVal = val;
+      sum += val;
+    }
+    double range = maxVal - minVal;
+    if (range < 1.0) {
+      return {'bpm': 72, 'hrv': 45};
+    }
+
+    double mean = sum / data.length;
+    double threshold = mean + 0.1 * range;
+    
+    double sampleRate = data.length / durationSeconds;
+    int minDistanceSamples = (0.4 * sampleRate).round().clamp(5, 200);
+
+    List<int> peakIndices = [];
+    int lastPeakIndex = -minDistanceSamples;
+
+    for (int i = 1; i < data.length - 1; i++) {
+      if (data[i] > data[i - 1] && data[i] > data[i + 1] && data[i] > threshold) {
+        if (i - lastPeakIndex >= minDistanceSamples) {
+          peakIndices.add(i);
+          lastPeakIndex = i;
+        }
+      }
+    }
+
+    if (peakIndices.isEmpty) {
+      return {'bpm': 72, 'hrv': 45};
+    }
+
+    double bpm = (peakIndices.length / durationSeconds) * 60;
+    int finalBpm = bpm.round().clamp(50, 180);
+
+    if (peakIndices.length < 3) {
+      return {'bpm': finalBpm, 'hrv': 45};
+    }
+
+    List<double> intervalsMs = [];
+    for (int i = 1; i < peakIndices.length; i++) {
+      double intervalSamples = (peakIndices[i] - peakIndices[i - 1]).toDouble();
+      double intervalMs = (intervalSamples / sampleRate) * 1000;
+      intervalsMs.add(intervalMs);
+    }
+
+    double avgInterval = intervalsMs.reduce((a, b) => a + b) / intervalsMs.length;
+    double sumSquaredDiffs = 0;
+    for (final interval in intervalsMs) {
+      double diff = interval - avgInterval;
+      sumSquaredDiffs += diff * diff;
+    }
+    double variance = sumSquaredDiffs / intervalsMs.length;
+    double stdDev = math.sqrt(variance);
+
+    int finalHrv = stdDev.round().clamp(15, 150);
+
+    return {'bpm': finalBpm, 'hrv': finalHrv};
+  }
+
   void _finishRecording() {
     _stopHardwareAndListen();
 
@@ -342,11 +410,13 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
     print('PPG (A1): $_ppgData');
     print('ECG (A2): $_ecgData');
 
+    final metrics = _estimateHeartMetrics(_ppgData, _recordDuration);
+
     setState(() {
       _isRecording = false;
       _recordingDone = true;
-      _hrCtrl.text = _ppgData.isNotEmpty ? _ppgData.length.toString() : "0";
-      _hrvCtrl.text = "45";
+      _hrCtrl.text = metrics['bpm'].toString();
+      _hrvCtrl.text = metrics['hrv'].toString();
     });
 
     if (mounted) {
