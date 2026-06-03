@@ -198,8 +198,11 @@ def ppg_processing(measurement_id):
 
     data = ppg_df
 
-    A1 = data['A1'].values
-    input_sig = A1
+
+    if 'A1' in data.columns:
+        input_sig = data['A1'].values
+    else:
+        input_sig = data.iloc[:,0].values
     
     # Bitalino raw ECG sampling rate is 1000 Hz
     sampling_rate = 1000
