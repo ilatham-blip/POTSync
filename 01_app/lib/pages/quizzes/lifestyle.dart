@@ -157,18 +157,18 @@ class _LifestyleSurveyScreenState extends State<_LifestyleSurveyScreen> {
 
   // Data fields
   DateTime _date = DateTime.now();
-  bool? _hotPlace; // Nullable for initial empty state
-  bool? _refinedCarbs;
+  bool _hotPlace = false;
+  bool _refinedCarbs = false;
   double _standingMins = 0;
   double _carbsGrams = 0; // Not used in new UI? Kept for data structure if needed, or mapped from boolean
   double _waterLitres = 0;
   double _alcoholUnits = 0;
-  bool? _restTooMuch;
+  bool _restTooMuch = false;
   double _exMild = 0;
   double _exModerate = 0;
   double _exIntense = 0;
-  bool? _onPeriod;
-  int? _stressLevel; // 0-3
+  bool _onPeriod = false;
+  int _stressLevel = 0; // 0-3
   final TextEditingController _notesCtrl = TextEditingController();
 
   String? _gender;
@@ -231,18 +231,18 @@ class _LifestyleSurveyScreenState extends State<_LifestyleSurveyScreen> {
   LifestyleDraft _buildDraft() => LifestyleDraft(
         currentPage: _currentPage,
         date: _date,
-        hotPlace: _hotPlace ?? false,
-        refinedCarbs: _refinedCarbs ?? false,
+        hotPlace: _hotPlace,
+        refinedCarbs: _refinedCarbs,
         standingMins: _standingMins,
         carbsGrams: _carbsGrams,
         waterLitres: _waterLitres,
         alcoholUnits: _alcoholUnits,
-        restTooMuch: _restTooMuch ?? false,
+        restTooMuch: _restTooMuch,
         exMild: _exMild,
         exModerate: _exModerate,
         exIntense: _exIntense,
-        onPeriod: _onPeriod ?? false,
-        stressLevel: (_stressLevel ?? 0).toDouble(),
+        onPeriod: _onPeriod,
+        stressLevel: _stressLevel.toDouble(),
         notes: _notesCtrl.text,
       );
 
@@ -295,18 +295,18 @@ class _LifestyleSurveyScreenState extends State<_LifestyleSurveyScreen> {
     try {
       await app.saveLifestyleEntry(
         date: _date,
-        hotPlace: _hotPlace ?? false,
-        refinedCarbs: _refinedCarbs ?? false,
+        hotPlace: _hotPlace,
+        refinedCarbs: _refinedCarbs,
         standingMins: _standingMins.round(),
         carbsGrams: _carbsGrams.round(),
         waterLitres: double.parse(_waterLitres.toStringAsFixed(2)),
         alcoholUnits: _alcoholUnits.round(),
-        restTooMuch: _restTooMuch ?? false,
+        restTooMuch: _restTooMuch,
         exMildMins: _exMild.round(),
         exModerateMins: _exModerate.round(),
         exIntenseMins: _exIntense.round(),
-        onPeriod: _onPeriod ?? false,
-        stressLevel: (_stressLevel ?? 0).round(),
+        onPeriod: _onPeriod,
+        stressLevel: _stressLevel,
         notes: _notesCtrl.text.trim(),
       );
 
@@ -433,7 +433,7 @@ class _LifestyleSurveyScreenState extends State<_LifestyleSurveyScreen> {
     required String title,
     String? subtitle,
     required IconData icon,
-    required bool? value,
+    required bool value,
     required ValueChanged<bool> onChanged,
   }) {
     return SingleChildScrollView(
@@ -451,15 +451,15 @@ class _LifestyleSurveyScreenState extends State<_LifestyleSurveyScreen> {
                   const SizedBox(height: 12),
                 ],
                 _OptionButton(
-                  label: 'Yes',
-                  selected: value == true,
-                  onTap: () => onChanged(true),
-                ),
-                const SizedBox(height: 12),
-                _OptionButton(
                   label: 'No',
                   selected: value == false,
                   onTap: () => onChanged(false),
+                ),
+                const SizedBox(height: 12),
+                _OptionButton(
+                  label: 'Yes',
+                  selected: value == true,
+                  onTap: () => onChanged(true),
                 ),
               ],
             ),

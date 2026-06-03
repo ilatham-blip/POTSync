@@ -48,6 +48,7 @@ class GeneralPlot extends StatelessWidget {
                   FlSpot(index.toDouble()*timeint, val.toDouble()),
               ],
               isCurved: true,
+              preventCurveOverShooting: true,
               barWidth: 4,
               color: Colors.blue,
             ),
@@ -154,11 +155,12 @@ class GeneralBarChart extends StatelessWidget {
 }
 
 class MultiSymptomPlot extends StatelessWidget {
-  final List<double> dizziness;
-  final List<double> fatigue;
-  final List<double> hydration;
+  final List<FlSpot> dizziness;
+  final List<FlSpot> fatigue;
+  final List<FlSpot> hydration;
   final double width;
   final double height;
+  final String timeframe;
 
   const MultiSymptomPlot({
     super.key,
@@ -167,16 +169,18 @@ class MultiSymptomPlot extends StatelessWidget {
     required this.hydration,
     required this.width,
     required this.height,
+    required this.timeframe,
   });
 
   @override
   Widget build(BuildContext context) {
     final List<LineChartBarData> lines = [];
 
-    LineChartBarData makeLine(List<double> vals, Color color) {
+    LineChartBarData makeLine(List<FlSpot> spots, Color color) {
       return LineChartBarData(
-        spots: [for (int i = 0; i < vals.length; i++) FlSpot(i.toDouble(), vals[i])],
+        spots: spots,
         isCurved: true,
+        preventCurveOverShooting: true,
         color: color,
         barWidth: 3,
         dotData: FlDotData(show: true),
@@ -201,29 +205,113 @@ class MultiSymptomPlot extends StatelessWidget {
       );
     }
 
-    // compute max X for axis bounds (Y is always 0-10)
-    final maxLen = [dizziness.length, fatigue.length, hydration.length].reduce((a, b) => a > b ? a : b);
+    // Configure bounds and labels based on the timeframe
+    double minX = 0;
+    double maxX = 6;
+    double interval = 1;
+    String bottomAxisTitle = 'Time (Days)';
+
+    if (timeframe == 'day') {
+      minX = 0;
+      maxX = 24;
+      interval = 6;
+      bottomAxisTitle = 'Time of Day';
+    } else if (timeframe == 'week') {
+      minX = 0;
+      maxX = 6;
+      interval = 1;
+      bottomAxisTitle = 'Day of Week';
+    } else if (timeframe == 'month') {
+      minX = 0;
+      maxX = 29;
+      interval = 5;
+      bottomAxisTitle = 'Date';
+    }
+
+    // Generate dynamic weekday labels for the last 7 days
+    final now = DateTime.now();
+    final dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final List<String> weekLabels = List.generate(7, (i) {
+      final date = now.subtract(Duration(days: 6 - i));
+      return dayNames[date.weekday - 1];
+    });
+
+    // Generate dynamic date labels for the last 30 days
+    final List<String> monthLabels = List.generate(30, (i) {
+      final date = now.subtract(Duration(days: 29 - i));
+      final monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return '${monthNames[date.month - 1]} ${date.day}';
+    });
 
     return SizedBox(
       width: width,
       height: height,
       child: LineChart(
         LineChartData(
-          minX: 0,
-          maxX: (maxLen - 1).toDouble().clamp(0, double.infinity),
+          minX: minX,
+          maxX: maxX,
           minY: 0,
           maxY: 10,
           gridData: FlGridData(show: true),
           borderData: FlBorderData(show: true),
           titlesData: FlTitlesData(
-            topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
-            leftTitles: AxisTitles(
+            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            bottomTitles: AxisTitles(
+              axisNameWidget: Text(
+                bottomAxisTitle,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                  color: Colors.black87,
+                ),
+              ),
+              axisNameSize: 22,
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 22,
+                interval: interval,
+                getTitlesWidget: (value, meta) {
+                  final idx = value.round();
+                  if (timeframe == 'day') {
+                    if (idx % 6 != 0) return const Text('');
+                    switch (idx) {
+                      case 0: return const Text('12 AM', style: TextStyle(fontSize: 9));
+                      case 6: return const Text('6 AM', style: TextStyle(fontSize: 9));
+                      case 12: return const Text('12 PM', style: TextStyle(fontSize: 9));
+                      case 18: return const Text('6 PM', style: TextStyle(fontSize: 9));
+                      case 24: return const Text('12 AM', style: TextStyle(fontSize: 9));
+                      default: return const Text('');
+                    }
+                  } else if (timeframe == 'week') {
+                    if (idx >= 0 && idx < 7) {
+                      return Text(weekLabels[idx], style: const TextStyle(fontSize: 9));
+                    }
+                  } else if (timeframe == 'month') {
+                    if (idx >= 0 && idx < 30) {
+                      if (idx % 5 == 0 || idx == 29) {
+                        return Text(monthLabels[idx], style: const TextStyle(fontSize: 9));
+                      }
+                    }
+                  }
+                  return const Text('');
+                },
+              ),
+            ),
+            leftTitles: const AxisTitles(
+              axisNameWidget: Text(
+                'Severity Level',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                  color: Colors.black87,
+                ),
+              ),
+              axisNameSize: 22,
               sideTitles: SideTitles(
                 showTitles: true,
                 interval: 2,
-                reservedSize: 40,
+                reservedSize: 30,
               ),
             ),
           ),

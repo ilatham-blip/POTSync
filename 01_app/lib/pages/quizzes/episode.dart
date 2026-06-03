@@ -198,13 +198,13 @@ class _EpisodeSurveyScreenState extends State<_EpisodeSurveyScreen> {
   ];
 
   // Local symptom scores (keyed by symptom string)
-  late final Map<String, Severity?> _scores;
+  late final Map<String, Severity> _scores;
 
   @override
   void initState() {
     super.initState();
-    // Initialize all to null (no selection)
-    _scores = {for (final s in _symptoms) s: null};
+    // Initialize all to Severity.none (None)
+    _scores = {for (final s in _symptoms) s: Severity.none};
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final appState = Provider.of<MyAppState>(context, listen: false);
@@ -239,8 +239,7 @@ class _EpisodeSurveyScreenState extends State<_EpisodeSurveyScreen> {
   Map<String, double> _scoresToDoubleMap() {
     return {
       for (final entry in _scores.entries)
-        if (entry.value != null)
-          entry.key: _severityToValue(entry.value!).toDouble(),
+        entry.key: _severityToValue(entry.value).toDouble(),
     };
   }
 
@@ -304,8 +303,7 @@ class _EpisodeSurveyScreenState extends State<_EpisodeSurveyScreen> {
     // Push scores to appState
     final appState = Provider.of<MyAppState>(context, listen: false);
     for (final entry in _scores.entries) {
-      // If value is null, default to 0 (None)
-      final val = entry.value == null ? 0.0 : _severityToValue(entry.value!).toDouble();
+      final val = _severityToValue(entry.value).toDouble();
       appState.updateEpisodeScore(entry.key, val);
     }
     

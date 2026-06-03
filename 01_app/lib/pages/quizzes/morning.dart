@@ -194,7 +194,7 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
   final _pluxService = PluxService();
 
   // --- PLUX STATE VARIABLES ---
-  final int _recordDuration = 120; // Changed back to 20 for production
+  final int _recordDuration = 5; // Changed back to 20 for production
   bool _isPluxConnected = false;
 
   // App Modes
@@ -247,13 +247,20 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
     });
   }
 
+  bool _isDisconnected = false;
+  Future<void> _safeDisconnect() async {
+    if (_isDisconnected) return;
+    _isDisconnected = true;
+    await _pluxService.disconnect();
+  }
+
   @override
   void dispose() {
     _recordingTimer?.cancel();
     _dataSubscription?.cancel();
 
     // --- Kill the zombie connection when leaving the page! ---
-    _pluxService.disconnect();
+    _safeDisconnect();
     // ---------------------------------------------------------
 
     _hrCtrl.dispose();
@@ -328,6 +335,74 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
     });
   }
 
+  Map<String, int> _estimateHeartMetrics(List<double> data, int durationSeconds) {
+    if (data.isEmpty || durationSeconds <= 0) {
+      return {'bpm': 72, 'hrv': 45};
+    }
+
+    double minVal = data[0];
+    double maxVal = data[0];
+    double sum = 0;
+    for (final val in data) {
+      if (val < minVal) minVal = val;
+      if (val > maxVal) maxVal = val;
+      sum += val;
+    }
+    double range = maxVal - minVal;
+    if (range < 1.0) {
+      return {'bpm': 72, 'hrv': 45};
+    }
+
+    double mean = sum / data.length;
+    double threshold = mean + 0.1 * range;
+    
+    double sampleRate = data.length / durationSeconds;
+    int minDistanceSamples = (0.4 * sampleRate).round().clamp(5, 200);
+
+    List<int> peakIndices = [];
+    int lastPeakIndex = -minDistanceSamples;
+
+    for (int i = 1; i < data.length - 1; i++) {
+      if (data[i] > data[i - 1] && data[i] > data[i + 1] && data[i] > threshold) {
+        if (i - lastPeakIndex >= minDistanceSamples) {
+          peakIndices.add(i);
+          lastPeakIndex = i;
+        }
+      }
+    }
+
+    if (peakIndices.isEmpty) {
+      return {'bpm': 72, 'hrv': 45};
+    }
+
+    double bpm = (peakIndices.length / durationSeconds) * 60;
+    int finalBpm = bpm.round().clamp(50, 180);
+
+    if (peakIndices.length < 3) {
+      return {'bpm': finalBpm, 'hrv': 45};
+    }
+
+    List<double> intervalsMs = [];
+    for (int i = 1; i < peakIndices.length; i++) {
+      double intervalSamples = (peakIndices[i] - peakIndices[i - 1]).toDouble();
+      double intervalMs = (intervalSamples / sampleRate) * 1000;
+      intervalsMs.add(intervalMs);
+    }
+
+    double avgInterval = intervalsMs.reduce((a, b) => a + b) / intervalsMs.length;
+    double sumSquaredDiffs = 0;
+    for (final interval in intervalsMs) {
+      double diff = interval - avgInterval;
+      sumSquaredDiffs += diff * diff;
+    }
+    double variance = sumSquaredDiffs / intervalsMs.length;
+    double stdDev = math.sqrt(variance);
+
+    int finalHrv = stdDev.round().clamp(15, 150);
+
+    return {'bpm': finalBpm, 'hrv': finalHrv};
+  }
+
   void _finishRecording() {
     _stopHardwareAndListen();
 
@@ -335,11 +410,13 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
     print('PPG (A1): $_ppgData');
     print('ECG (A2): $_ecgData');
 
+    final metrics = _estimateHeartMetrics(_ppgData, _recordDuration);
+
     setState(() {
       _isRecording = false;
       _recordingDone = true;
-      _hrCtrl.text = _ppgData.isNotEmpty ? _ppgData.length.toString() : "0";
-      _hrvCtrl.text = "45";
+      _hrCtrl.text = metrics['bpm'].toString();
+      _hrvCtrl.text = metrics['hrv'].toString();
     });
 
     if (mounted) {
@@ -400,7 +477,7 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
     appState.pauseMorningCheckIn(_buildDraft());
 
     // Force disconnect BEFORE leaving
-    await _pluxService.disconnect();
+    await _safeDisconnect();
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -426,7 +503,7 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
       appState.clearMorningDraft();
 
       // Force disconnect BEFORE leaving
-      await _pluxService.disconnect();
+      await _safeDisconnect();
       if (mounted) Navigator.of(context).pop();
     }
   }
@@ -455,6 +532,8 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
       await appState.saveMorningCheckIn(
         date: _date,
         time: _time,
+        heartRateBpm: int.tryParse(_hrCtrl.text),
+        hrvMs: int.tryParse(_hrvCtrl.text),
         insomnia: _insomnia,
         abnormalTiredness: _abnormalTiredness,
         dizziness: _dizziness,
@@ -472,12 +551,12 @@ class _MorningSurveyScreenState extends State<_MorningSurveyScreen> {
       );
 
       // Force disconnect BEFORE leaving
-      await _pluxService.disconnect();
+      await _safeDisconnect();
       if (mounted) {
         Navigator.of(context).pop();
       }
     } catch (e) {
-      await _pluxService.disconnect();
+      await _safeDisconnect();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -965,20 +1044,28 @@ class _SeveritySelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
+    return Column(
       children: List.generate(4, (i) {
         final selected = value == _values[i];
-        return ChoiceChip(
-          label: Text(_labels[i]),
-          selected: selected,
-          pressElevation: 0,
-          onSelected: (_) => onChanged(_values[i]),
-          selectedColor: const Color(0xFF4F7CFF),
-          labelStyle: TextStyle(
-            color: selected ? Colors.white : Colors.black87,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: () => onChanged(_values[i]),
+              style: OutlinedButton.styleFrom(
+                backgroundColor: selected ? const Color(0xFF4F7CFF) : Colors.white,
+                foregroundColor: selected ? Colors.white : Colors.black87,
+                side: BorderSide(
+                    color: selected ? const Color(0xFF4F7CFF) : Colors.black26),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                textStyle: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              child: Text(_labels[i]),
+            ),
           ),
         );
       }),

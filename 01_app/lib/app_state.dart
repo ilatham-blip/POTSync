@@ -265,6 +265,276 @@ class LifestyleDraft {
 class MyAppState extends ChangeNotifier{
   final DatabaseService _databaseService = DatabaseService();
 
+  MyAppState() {
+    // Listen to authentication state changes
+    Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      final session = data.session;
+      if (session != null) {
+        loadHistory(session.user.id);
+      } else {
+        clearHistory();
+      }
+    });
+  }
+
+  Severity _parseSeverity(dynamic val) {
+    if (val == null) return Severity.none;
+    int idx = 0;
+    if (val is int) {
+      idx = val;
+    } else if (val is String) {
+      idx = int.tryParse(val) ?? 0;
+    }
+    if (idx < 0 || idx >= Severity.values.length) return Severity.none;
+    return Severity.values[idx];
+  }
+
+  DateTime _parseDateTime(dynamic dateVal, dynamic timeVal, dynamic createdAtVal, {bool preferCustomTime = false}) {
+    if (preferCustomTime && dateVal != null && timeVal != null) {
+      final dateStr = dateVal.toString().trim();
+      final timeStr = timeVal.toString().trim();
+      final dateParts = dateStr.split('-');
+      if (dateParts.length >= 3) {
+        final year = int.tryParse(dateParts[0]) ?? DateTime.now().year;
+        final month = int.tryParse(dateParts[1]) ?? DateTime.now().month;
+        final day = int.tryParse(dateParts[2]) ?? DateTime.now().day;
+        
+        final timeParts = timeStr.split(':');
+        final hour = timeParts.isNotEmpty ? (int.tryParse(timeParts[0]) ?? 12) : 12;
+        final minute = timeParts.length > 1 ? (int.tryParse(timeParts[1]) ?? 0) : 0;
+        final second = timeParts.length > 2 ? (int.tryParse(timeParts[2]) ?? 0) : 0;
+        
+        return DateTime(year, month, day, hour, minute, second);
+      }
+    }
+
+    if (createdAtVal != null) {
+      final parsed = DateTime.tryParse(createdAtVal.toString());
+      if (parsed != null) return parsed.toLocal();
+    }
+
+    if (dateVal == null) return DateTime.now();
+    final dateStr = dateVal.toString().trim();
+    
+    if (dateStr.contains('T')) {
+      final parsed = DateTime.tryParse(dateStr);
+      if (parsed != null) return parsed.toLocal();
+    }
+    
+    final timeStr = timeVal?.toString().trim() ?? '12:00';
+    final dateParts = dateStr.split('-');
+    if (dateParts.length < 3) {
+      final parsed = DateTime.tryParse(dateStr);
+      if (parsed != null) return parsed.toLocal();
+      return DateTime.now();
+    }
+    
+    final year = int.tryParse(dateParts[0]) ?? DateTime.now().year;
+    final month = int.tryParse(dateParts[1]) ?? DateTime.now().month;
+    final day = int.tryParse(dateParts[2]) ?? DateTime.now().day;
+    
+    final timeParts = timeStr.split(':');
+    final hour = timeParts.isNotEmpty ? (int.tryParse(timeParts[0]) ?? 12) : 12;
+    final minute = timeParts.length > 1 ? (int.tryParse(timeParts[1]) ?? 0) : 0;
+    final second = timeParts.length > 2 ? (int.tryParse(timeParts[2]) ?? 0) : 0;
+    
+    return DateTime(year, month, day, hour, minute, second);
+  }
+
+  MorningEntry _parseMorningEntry(Map<String, dynamic> map) {
+    return MorningEntry(
+      dateTime: _parseDateTime(map['date'], map['time'], map['created_at']),
+      insomnia: _parseSeverity(map['insomnia']),
+      abnormalTiredness: _parseSeverity(map['abnormal_tiredness']),
+      dizziness: _parseSeverity(map['dizziness']),
+      palpitations: _parseSeverity(map['palpitations']),
+      dyspnoea: _parseSeverity(map['dyspnoea']),
+      chestPain: _parseSeverity(map['chest_pain']),
+      headache: _parseSeverity(map['headache']),
+      concentration: _parseSeverity(map['concentration']),
+      musclePain: _parseSeverity(map['muscle_pain']),
+      nausea: _parseSeverity(map['nausea']),
+      giProblems: _parseSeverity(map['gi_problems']),
+      notes: map['notes'] as String? ?? '',
+    );
+  }
+
+  EveningEntry _parseEveningEntry(Map<String, dynamic> map) {
+    return EveningEntry(
+      dateTime: _parseDateTime(map['date'], map['time'], map['created_at']),
+      heartRateBpm: map['heart_rate'] as int? ?? 0,
+      hrvMs: map['hrv'] as int? ?? 0,
+      dizziness: _parseSeverity(map['dizziness']),
+      palpitations: _parseSeverity(map['palpitations']),
+      dyspnoea: _parseSeverity(map['dyspnoea']),
+      chestPain: _parseSeverity(map['chest_pain']),
+      headache: _parseSeverity(map['headache']),
+      concentration: _parseSeverity(map['concentration']),
+      musclePain: _parseSeverity(map['muscle_pain']),
+      nausea: _parseSeverity(map['nausea']),
+      giProblems: _parseSeverity(map['gi_problems']),
+      abnormalTiredness: _parseSeverity(map['abnormal_tiredness']),
+      insomnia: _parseSeverity(map['insomnia']),
+      notes: map['notes'] as String? ?? '',
+    );
+  }
+
+  EpisodeEntry _parseEpisodeEntry(Map<String, dynamic> map) {
+    Map<String, double> parsedScores = {};
+    if (map['scores'] != null) {
+      if (map['scores'] is Map) {
+        (map['scores'] as Map).forEach((k, v) {
+          if (v is num) {
+            parsedScores[k.toString()] = v.toDouble();
+          }
+        });
+      }
+    }
+    return EpisodeEntry(
+      dateTime: _parseDateTime(map['date'], map['time'], map['created_at'], preferCustomTime: true),
+      scores: parsedScores,
+      notes: map['notes'] as String? ?? '',
+    );
+  }
+
+  LifestyleEntry _parseLifestyleEntry(Map<String, dynamic> map) {
+    return LifestyleEntry(
+      date: _parseDateTime(map['date'], null, map['created_at']),
+      hotPlace: map['hot_place'] as bool? ?? false,
+      refinedCarbs: map['refined_carbs'] as bool? ?? false,
+      standingMins: (map['standing_mins'] as num?)?.toInt() ?? 0,
+      carbsGrams: (map['carbs_grams'] as num?)?.toInt() ?? 0,
+      waterLitres: (map['water_litres'] as num?)?.toDouble() ?? 0.0,
+      alcoholUnits: (map['alcohol_units'] as num?)?.toInt() ?? 0,
+      restTooMuch: map['rest_too_much'] as bool? ?? false,
+      exMildMins: (map['ex_mild'] as num?)?.toInt() ?? 0,
+      exModerateMins: (map['ex_moderate'] as num?)?.toInt() ?? 0,
+      exIntenseMins: (map['ex_intense'] as num?)?.toInt() ?? 0,
+      onPeriod: map['on_period'] as bool? ?? false,
+      stressLevel: (map['stress_level'] as num?)?.toInt() ?? 0,
+      notes: map['notes'] as String? ?? '',
+    );
+  }
+
+  Future<void> loadHistory(String userId) async {
+    try {
+      final morningData = await _databaseService.fetchMorningCheckIns(userId);
+      _morningEntries.clear();
+      dizziness.clear();
+      nausea.clear();
+      for (final map in morningData) {
+        final entry = _parseMorningEntry(map);
+        _morningEntries.add(entry);
+      }
+      _morningEntries.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+
+      final eveningData = await _databaseService.fetchEveningCheckIns(userId);
+      eveningEntries.clear();
+      for (final map in eveningData) {
+        final entry = _parseEveningEntry(map);
+        eveningEntries.add(entry);
+      }
+      eveningEntries.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+
+      final episodeData = await _databaseService.fetchEpisodes(userId);
+      episodeEntries.clear();
+      for (final map in episodeData) {
+        final entry = _parseEpisodeEntry(map);
+        episodeEntries.add(entry);
+      }
+      episodeEntries.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+
+      final lifestyleData = await _databaseService.fetchLifestyleLogs(userId);
+      _lifestyleEntries.clear();
+      hydration.clear();
+      for (final map in lifestyleData) {
+        final entry = _parseLifestyleEntry(map);
+        _lifestyleEntries.add(entry);
+      }
+      _lifestyleEntries.sort((a, b) => b.date.compareTo(a.date));
+
+      // Now populate trend lists in chronological ascending order (oldest first)
+      // Morning check-ins trend
+      final morningAsc = List<MorningEntry>.from(_morningEntries).reversed;
+      for (final entry in morningAsc) {
+        final val = (entry.dizziness.index / 3.0) * 10.0;
+        dizziness.add(val);
+        final nauseaVal = (entry.nausea.index / 3.0) * 10.0;
+        nausea.add(nauseaVal);
+      }
+
+      // Evening check-ins trend
+      final eveningAsc = List<EveningEntry>.from(eveningEntries).reversed;
+      for (final entry in eveningAsc) {
+        final val = (entry.dizziness.index / 3.0) * 10.0;
+        dizziness.add(val);
+        final nauseaVal = (entry.nausea.index / 3.0) * 10.0;
+        nausea.add(nauseaVal);
+      }
+
+      // Episode check-ins trend
+      final episodeAsc = List<EpisodeEntry>.from(episodeEntries).reversed;
+      for (final entry in episodeAsc) {
+        final dizzinessVal = entry.scores['Dizziness when standing'] ??
+            entry.scores['Dizziness in upright position or while standing up'] ??
+            entry.scores['Dizziness, feeling that you are going to faint'];
+        if (dizzinessVal != null) {
+          dizziness.add(dizzinessVal);
+        }
+      }
+
+      // Lifestyle check-ins trend
+      final lifestyleAsc = List<LifestyleEntry>.from(_lifestyleEntries).reversed;
+      for (final entry in lifestyleAsc) {
+        final val = (entry.waterLitres / 5.0) * 10.0;
+        hydration.add(val);
+      }
+
+      // Restore latest quiz scores maps for metric widgets and calculations
+      if (_morningEntries.isNotEmpty) {
+        final latest = _morningEntries.first;
+        morningScores["Fatigue"] = (latest.abnormalTiredness.index / 3.0) * 10.0;
+        morningScores["Dizziness when standing"] = (latest.dizziness.index / 3.0) * 10.0;
+        morningScores["Heart racing and palpitations"] = (latest.palpitations.index / 3.0) * 10.0;
+      }
+      if (eveningEntries.isNotEmpty) {
+        final latest = eveningEntries.first;
+        eveningScores["Abnormal Fatigue after rest"] = (latest.abnormalTiredness.index / 3.0) * 10.0;
+      }
+      if (_lifestyleEntries.isNotEmpty) {
+        final latest = _lifestyleEntries.first;
+        lifestyleScores["standing_mins"] = latest.standingMins.toDouble();
+        lifestyleScores["carbs_grams"] = latest.carbsGrams.toDouble();
+        lifestyleScores["water_litres"] = latest.waterLitres;
+        lifestyleScores["alcohol_units"] = latest.alcoholUnits.toDouble();
+        lifestyleScores["exercise_mild"] = latest.exMildMins.toDouble();
+        lifestyleScores["period_day"] = latest.onPeriod ? 1.0 : 0.0;
+        lifestyleScores["stress_level"] = latest.stressLevel.toDouble();
+      }
+      if (episodeEntries.isNotEmpty) {
+        final latest = episodeEntries.first;
+        latest.scores.forEach((k, v) {
+          episodeScores[k] = v;
+        });
+      }
+
+      notifyListeners();
+    } catch (e) {
+      print('Error loading history: $e');
+    }
+  }
+
+  void clearHistory() {
+    _morningEntries.clear();
+    eveningEntries.clear();
+    episodeEntries.clear();
+    _lifestyleEntries.clear();
+    dizziness.clear();
+    nausea.clear();
+    hydration.clear();
+    notifyListeners();
+  }
+
   String _dateOnly(DateTime date) {
     final y = date.year.toString().padLeft(4, '0');
     final m = date.month.toString().padLeft(2, '0');
@@ -614,10 +884,42 @@ class MyAppState extends ChangeNotifier{
   List<LifestyleEntry> get lifestyleEntries => List.unmodifiable(_lifestyleEntries);
   LifestyleDraft? lifestyleDraft;
 
+  int get episodesThisWeekCount {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return episodeEntries.where((e) {
+      final entryDate = DateTime(e.dateTime.year, e.dateTime.month, e.dateTime.day);
+      final diff = today.difference(entryDate).inDays;
+      return diff >= 0 && diff < 7;
+    }).length;
+  }
+
+  int get checkInAdherencePercentage {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    
+    int morningCount = _morningEntries.where((e) {
+      final entryDate = DateTime(e.dateTime.year, e.dateTime.month, e.dateTime.day);
+      final diff = today.difference(entryDate).inDays;
+      return diff >= 0 && diff < 7;
+    }).length;
+
+    int eveningCount = eveningEntries.where((e) {
+      final entryDate = DateTime(e.dateTime.year, e.dateTime.month, e.dateTime.day);
+      final diff = today.difference(entryDate).inDays;
+      return diff >= 0 && diff < 7;
+    }).length;
+
+    final totalLogged = morningCount + eveningCount;
+    return ((totalLogged / 14.0) * 100).round().clamp(0, 100);
+  }
+
   // Save method used by MorningQuiz
   Future<void> saveMorningCheckIn({
     required DateTime date,
     required TimeOfDay time,
+    int? heartRateBpm,
+    int? hrvMs,
     required Severity insomnia,
     required Severity abnormalTiredness,
     required Severity dizziness,
@@ -668,6 +970,8 @@ class MyAppState extends ChangeNotifier{
       'user_id': user.id,
       'date': _dateOnly(date),
       'time': '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}',
+      'heart_rate': heartRateBpm,
+      'hrv': hrvMs,
       'insomnia': insomnia.index,
       'abnormal_tiredness': abnormalTiredness.index,
       'dizziness': dizziness.index,

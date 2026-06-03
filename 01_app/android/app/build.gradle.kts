@@ -29,5 +29,5 @@ android {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    implementation("info.plux.api:api:1.5.2")
+    implementation(files("libs/api-1.5.2.aar"))
 }
