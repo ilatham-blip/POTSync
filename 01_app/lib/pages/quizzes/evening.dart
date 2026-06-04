@@ -203,7 +203,7 @@ class _EveningSurveyScreenState extends State<_EveningSurveyScreen> {
   final _pluxService = PluxService();
 
   // --- PLUX STATE VARIABLES ---
-  final int _recordDuration = 120;
+  final int _recordDuration = 5;
   bool _isPluxConnected = false;
 
   // App Modes
@@ -567,7 +567,12 @@ class _EveningSurveyScreenState extends State<_EveningSurveyScreen> {
     } catch (e) {
       await _safeDisconnect();
       if (mounted) {
-        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save log: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }

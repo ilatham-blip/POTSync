@@ -147,33 +147,8 @@ def load_ppg_into_pipeline(measurement_id: str, bucket_name: str = 'raw_uploads'
     if ppg_df is None:
         return measurement, None
         
-    # Step 4: Convert to Parquet if it was JSON
-    if raw_file_path.endswith('.json'):
-        print(f"\n--- CONVERTING JSON TO PARQUET ---")
-        parquet_path = raw_file_path.replace('.json', '.parquet')
-        parquet_buffer = BytesIO()
-        ppg_df.to_parquet(parquet_buffer, index=False)
-        parquet_buffer.seek(0)
-        
-        try:
-            # Upload new Parquet file
-            supabase.storage.from_(bucket_name).upload(
-                path=parquet_path,
-                file=parquet_buffer.getvalue(),
-                file_options={"content-type": "application/octet-stream", "upsert": "true"}
-            )
-            print(f"✅ Uploaded {parquet_path}")
-            
-            # Delete old JSON file
-            supabase.storage.from_(bucket_name).remove([raw_file_path])
-            print(f"✅ Deleted old {raw_file_path}")
-            
-            # Update measurements table with new path
-            supabase.table('measurements').update({'raw_file_path': parquet_path}).eq('measurement_id', measurement_id).execute()
-            measurement['raw_file_path'] = parquet_path
-            print(f"✅ Updated raw_file_path in database to {parquet_path}")
-        except Exception as e:
-            print(f"❌ Error during Parquet conversion/upload: {e}")
+    # Step 4: JSON files are processed directly without converting to Parquet
+    print(f"ℹ️ Keeping original JSON file format: {raw_file_path}")
     
     print("\n" + "="*60)
     print("✅ READY FOR PROCESSING")

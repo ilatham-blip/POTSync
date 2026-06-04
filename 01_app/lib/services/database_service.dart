@@ -294,7 +294,7 @@ class DatabaseService {
     try {
       await _client.from('measurements').insert({
         'user_id': userId,
-        'recorded_at': recordedAt.toIso8601String(),
+        'recorded_at': recordedAt.toUtc().toIso8601String(),
         'raw_file_path': filePath,
         'source': 'plux',
       });
@@ -311,10 +311,11 @@ class DatabaseService {
     final dateStr = data['date'] as String;
     final timeStr = data['time'] as String;
 
+    String? ppgPath;
     if (data['ppg_data'] is List) {
       final ppgList = List<double>.from(data['ppg_data'] as List);
       try {
-        final ppgPath = await uploadRawSignal(
+        ppgPath = await uploadRawSignal(
           userId: userId,
           checkinType: 'morning',
           dateStr: dateStr,
@@ -322,7 +323,6 @@ class DatabaseService {
           signalType: 'ppg',
           data: ppgList,
         );
-        data['ppg_data'] = ppgPath;
         if (ppgPath != null) {
           await _insertMeasurementRow(
             userId: userId,
@@ -332,14 +332,16 @@ class DatabaseService {
           );
         }
       } catch (e) {
-        print('Storage upload failed for ppg_data, falling back to DB storage: $e');
+        print('Storage upload failed for ppg_data: $e');
+        rethrow;
       }
     }
 
+    String? ecgPath;
     if (data['ecg_data'] is List) {
       final ecgList = List<double>.from(data['ecg_data'] as List);
       try {
-        final ecgPath = await uploadRawSignal(
+        ecgPath = await uploadRawSignal(
           userId: userId,
           checkinType: 'morning',
           dateStr: dateStr,
@@ -347,8 +349,6 @@ class DatabaseService {
           signalType: 'ecg',
           data: ecgList,
         );
-        data['ecg_data'] = ecgPath;
-        data['eog_data'] = ecgPath;
         if (ecgPath != null) {
           await _insertMeasurementRow(
             userId: userId,
@@ -358,12 +358,27 @@ class DatabaseService {
           );
         }
       } catch (e) {
-        print('Storage upload failed for ecg_data, falling back to DB storage: $e');
-        data['eog_data'] = data['ecg_data']; // Map fallback to eog_data
+        print('Storage upload failed for ecg_data: $e');
+        rethrow;
       }
     }
 
-    await _insertWithSchemaFallback('morning_checkins', data);
+    // Map file path strings to checkin columns if successful, otherwise remove
+    final checkinData = Map<String, dynamic>.from(data);
+    if (ppgPath != null) {
+      checkinData['ppg_data'] = ppgPath;
+    } else {
+      checkinData.remove('ppg_data');
+    }
+
+    if (ecgPath != null) {
+      checkinData['ecg_data'] = ecgPath;
+    } else {
+      checkinData.remove('ecg_data');
+    }
+    checkinData.remove('eog_data');
+
+    await _insertWithSchemaFallback('morning_checkins', checkinData);
   }
 
   // ---------------------------------------------------------------------------
@@ -374,10 +389,11 @@ class DatabaseService {
     final dateStr = data['date'] as String;
     final timeStr = data['time'] as String;
 
+    String? ppgPath;
     if (data['ppg_data'] is List) {
       final ppgList = List<double>.from(data['ppg_data'] as List);
       try {
-        final ppgPath = await uploadRawSignal(
+        ppgPath = await uploadRawSignal(
           userId: userId,
           checkinType: 'evening',
           dateStr: dateStr,
@@ -385,7 +401,6 @@ class DatabaseService {
           signalType: 'ppg',
           data: ppgList,
         );
-        data['ppg_data'] = ppgPath;
         if (ppgPath != null) {
           await _insertMeasurementRow(
             userId: userId,
@@ -395,14 +410,16 @@ class DatabaseService {
           );
         }
       } catch (e) {
-        print('Storage upload failed for ppg_data, falling back to DB storage: $e');
+        print('Storage upload failed for ppg_data: $e');
+        rethrow;
       }
     }
 
+    String? ecgPath;
     if (data['ecg_data'] is List) {
       final ecgList = List<double>.from(data['ecg_data'] as List);
       try {
-        final ecgPath = await uploadRawSignal(
+        ecgPath = await uploadRawSignal(
           userId: userId,
           checkinType: 'evening',
           dateStr: dateStr,
@@ -410,8 +427,6 @@ class DatabaseService {
           signalType: 'ecg',
           data: ecgList,
         );
-        data['ecg_data'] = ecgPath;
-        data['eog_data'] = ecgPath;
         if (ecgPath != null) {
           await _insertMeasurementRow(
             userId: userId,
@@ -421,12 +436,27 @@ class DatabaseService {
           );
         }
       } catch (e) {
-        print('Storage upload failed for ecg_data, falling back to DB storage: $e');
-        data['eog_data'] = data['ecg_data']; // Map fallback to eog_data
+        print('Storage upload failed for ecg_data: $e');
+        rethrow;
       }
     }
 
-    await _insertWithSchemaFallback('evening_checkins', data);
+    // Map file path strings to checkin columns if successful, otherwise remove
+    final checkinData = Map<String, dynamic>.from(data);
+    if (ppgPath != null) {
+      checkinData['ppg_data'] = ppgPath;
+    } else {
+      checkinData.remove('ppg_data');
+    }
+
+    if (ecgPath != null) {
+      checkinData['ecg_data'] = ecgPath;
+    } else {
+      checkinData.remove('ecg_data');
+    }
+    checkinData.remove('eog_data');
+
+    await _insertWithSchemaFallback('evening_checkins', checkinData);
   }
 
   // ---------------------------------------------------------------------------

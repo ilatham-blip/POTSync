@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:heartbeat/pages/more_page.dart';
 import 'package:heartbeat/supabase_keys.dart';
@@ -12,7 +13,16 @@ import 'pages/app_layout.dart';
 import 'pages/user_login_page.dart';
 import 'pages/create_profile_page.dart';
 
+class MyHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+  }
+}
+
 void main() async {
+  HttpOverrides.global = MyHttpOverrides();
   WidgetsFlutterBinding.ensureInitialized();
   
   // Initialize the supabase setup
@@ -30,7 +40,7 @@ void main() async {
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => MyAppState()),
+        ChangeNotifierProvider(create: (_) => MyAppState(), lazy: false),
       ],
       child: MaterialApp(
         title: 'Heartbeat',

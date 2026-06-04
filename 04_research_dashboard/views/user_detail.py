@@ -197,27 +197,32 @@ def show_user_detail(user_id: str, supabase):
                     raw_res = supabase.storage.from_("raw_uploads").download(file_path)
                     peak_res = supabase.storage.from_("peak_indices").download(peak_path)
                     
+                    # Load raw signal DataFrame
                     if file_path.endswith('.parquet'):
                         raw_df = pd.read_parquet(io.BytesIO(raw_res))
-                        peaks_df = pd.read_parquet(io.BytesIO(peak_res))
                     else:
-                        # Assume it's JSON and convert to parquet during data extraction
+                        # Assume it's JSON
                         import json
                         try:
                             raw_df = pd.read_json(io.BytesIO(raw_res))
+                        except ValueError:
+                            raw_json = json.loads(raw_res.decode('utf-8'))
+                            raw_df = pd.DataFrame(raw_json)
+                        raw_parquet = raw_df.to_parquet()
+                        raw_df = pd.read_parquet(io.BytesIO(raw_parquet))
+                        
+                    # Load peak indices DataFrame
+                    if peak_path.endswith('.parquet'):
+                        peaks_df = pd.read_parquet(io.BytesIO(peak_res))
+                    else:
+                        # Assume it's JSON
+                        import json
+                        try:
                             peaks_df = pd.read_json(io.BytesIO(peak_res))
                         except ValueError:
-                            # In case it's a JSON array of dicts and read_json fails
-                            raw_json = json.loads(raw_res.decode('utf-8'))
                             peak_json = json.loads(peak_res.decode('utf-8'))
-                            raw_df = pd.DataFrame(raw_json)
                             peaks_df = pd.DataFrame(peak_json)
-                            
-                        # Convert to parquet during data extraction
-                        raw_parquet = raw_df.to_parquet()
                         peaks_parquet = peaks_df.to_parquet()
-                        
-                        raw_df = pd.read_parquet(io.BytesIO(raw_parquet))
                         peaks_df = pd.read_parquet(io.BytesIO(peaks_parquet))
                     
                     # --- Plot 1: Raw Upload + Peaks Overlaid ---
